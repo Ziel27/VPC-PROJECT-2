@@ -1,13 +1,14 @@
 const AWS = require("aws-sdk");
+require("dotenv").config();
 
 // DynamoDB Table Creation Script
 const dynamoDB = new AWS.DynamoDB({
-  region: process.env.AWS_REGION || "us-east-1",
+  region: process.env.AWS_REGION,
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
 });
 
-const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME || "VPCProjectItems";
+const TABLE_NAME = process.env.DYNAMODB_TABLE_NAME;
 
 const params = {
   TableName: TABLE_NAME,

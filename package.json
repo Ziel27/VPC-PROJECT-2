@@ -1,0 +1,28 @@
+{
+  "name": "vpc-project-dern-stack",
+  "version": "1.0.0",
+  "description": "DERN Stack (DynamoDB, Express, React, Node.js) application for AWS VPC Project training",
+  "main": "index.js",
+  "scripts": {
+    "server": "cd server && npm start",
+    "client": "cd client && npm run dev",
+    "dev": "cd client && npm run dev",
+    "dev-server": "cd server && npm run dev",
+    "install-server": "cd server && npm install",
+    "install-client": "cd client && npm install",
+    "install-all": "npm run install-server && npm run install-client",
+    "build": "cd client && npm run build",
+    "preview": "cd client && npm run preview"
+  },
+  "keywords": [
+    "dern",
+    "dynamodb",
+    "express",
+    "react",
+    "nodejs",
+    "aws",
+    "vpc"
+  ],
+  "author": "",
+  "license": "ISC"
+}

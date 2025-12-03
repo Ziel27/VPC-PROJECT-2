@@ -2,6 +2,11 @@
 
 A serverless full-stack web application built with **DERN** stack (DynamoDB, Express, React, Node.js) deployed on AWS with a secure VPC architecture for training and demonstration purposes.
 
+DIAGRAM
+
+![Diagram](aws-diagram.jpg)
+
+
 ## 🏗️ AWS Architecture
 
 This project demonstrates a production-ready serverless architecture with the following AWS components:

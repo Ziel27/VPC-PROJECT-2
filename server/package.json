@@ -5,7 +5,11 @@
   "main": "handler.js",
   "scripts": {
     "start": "node handler.js",
-    "dev": "nodemon handler.js"
+    "dev": "nodemon handler.js",
+    "create-table": "node scripts/createTable.js",
+    "delete-table": "node scripts/deleteTable.js",
+    "list-tables": "node scripts/listTables.js",
+    "seed-table": "node scripts/seedTable.js"
   },
   "keywords": ["express", "dynamodb", "aws", "vpc"],
   "author": "",

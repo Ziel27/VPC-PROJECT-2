@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import axios from "axios";
+import api from "./lib/axios";
 import "./App.css";
 import ItemForm from "./components/ItemForm.jsx";
 import ItemList from "./components/ItemList.jsx";
@@ -15,7 +15,7 @@ function App() {
     try {
       setLoading(true);
       setError(null);
-      const response = await axios.get("/api/items");
+      const response = await api.get("/items");
       if (response.data.success) {
         setItems(response.data.items);
       }
@@ -34,7 +34,7 @@ function App() {
   // Create new item
   const handleCreate = async (itemData) => {
     try {
-      const response = await axios.post("/api/items", itemData);
+      const response = await api.post("/items", itemData);
       if (response.data.success) {
         setItems([...items, response.data.item]);
         return true;
@@ -49,7 +49,7 @@ function App() {
   // Update item
   const handleUpdate = async (id, itemData) => {
     try {
-      const response = await axios.put(`/api/items/${id}`, itemData);
+      const response = await api.put(`/items/${id}`, itemData);
       if (response.data.success) {
         setItems(
           items.map((item) => (item.id === id ? response.data.item : item))
@@ -71,7 +71,7 @@ function App() {
     }
 
     try {
-      const response = await axios.delete(`/api/items/${id}`);
+      const response = await api.delete(`/items/${id}`);
       if (response.data.success) {
         setItems(items.filter((item) => item.id !== id));
       }

@@ -1,13 +1,86 @@
 # VPC Project - DERN Stack Application
 
-A full-stack web application built with **DERN** stack (DynamoDB, Express, React, Node.js) for AWS VPC project training.
+A serverless full-stack web application built with **DERN** stack (DynamoDB, Express, React, Node.js) deployed on AWS with a secure VPC architecture for training and demonstration purposes.
 
-## 🏗️ Architecture
+## 🏗️ AWS Architecture
 
-- **Frontend**: React + Vite
-- **Backend**: Node.js with Express
-- **Database**: AWS DynamoDB
-- **Cloud**: AWS (VPC, EC2, DynamoDB)
+This project demonstrates a production-ready serverless architecture with the following AWS components:
+
+### Frontend Layer
+
+- **Amazon S3** - Static website hosting for React build artifacts
+- **Amazon CloudFront** - Global CDN for low-latency content delivery and HTTPS termination
+
+### Backend Layer
+
+- **AWS Lambda** - Serverless compute running in **private VPC subnets** for enhanced security
+- **Amazon API Gateway** - RESTful API endpoint for CloudFront → Lambda communication
+- **VPC (Virtual Private Cloud)** - Isolated network environment with:
+  - **Private Subnets** - Lambda functions deployed here (no direct internet access)
+  - **VPC Endpoint (Gateway)** - Enables private Lambda → DynamoDB communication without NAT
+
+### Data Layer
+
+- **Amazon DynamoDB** - Serverless NoSQL database accessed via VPC Gateway Endpoint
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Internet Users                          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ HTTPS
+                         ▼
+                 ┌───────────────┐
+                 │  CloudFront   │ (CDN)
+                 └───────┬───────┘
+                         │
+         ┌───────────────┴───────────────┐
+         │                               │
+    (Static)                         (API Calls)
+         │                               │
+         ▼                               ▼
+    ┌─────────┐                  ┌──────────────┐
+    │   S3    │                  │ API Gateway  │
+    │ Bucket  │                  │  (REST API)  │
+    └─────────┘                  └──────┬───────┘
+                                        │
+                                        │ Invoke
+                                        ▼
+                        ┌───────────────────────────────┐
+                        │           VPC                 │
+                        │  ┌─────────────────────────┐  │
+                        │  │   Private Subnet        │  │
+                        │  │  ┌────────────────┐     │  │
+                        │  │  │ Lambda Function│     │  │
+                        │  │  │   (handler.js) │     │  │
+                        │  │  └────────┬───────┘     │  │
+                        │  └───────────┼─────────────┘  │
+                        │              │                │
+                        │              │ Via VPC        │
+                        │              │ Endpoint       │
+                        │              ▼                │
+                        │     ┌────────────────┐        │
+                        │     │ VPC Endpoint   │        │
+                        │     │   (Gateway)    │        │
+                        │     └────────┬───────┘        │
+                        └──────────────┼────────────────┘
+                                       │
+                                       │ Private
+                                       ▼
+                               ┌──────────────┐
+                               │  DynamoDB    │
+                               │    Table     │
+                               └──────────────┘
+```
+
+### Key Security Features
+
+✅ Lambda runs in **private subnets** (no internet access)  
+✅ DynamoDB accessed via **VPC Gateway Endpoint** (traffic never leaves AWS network)  
+✅ **No NAT Gateway required** (cost-effective, more secure)  
+✅ CloudFront provides **HTTPS/TLS** termination  
+✅ API Gateway validates requests before invoking Lambda
 
 ## 📁 Project Structure
 
@@ -20,132 +93,329 @@ vpc-project-2/
 │   │   ├── App.js
 │   │   └── index.js
 │   └── package.json
-├── server/                # Express backend
+├── server/                # AWS Lambda backend
 │   ├── scripts/          # Utility scripts
 │   │   └── createTable.js
-│   ├── server.js
+│   ├── handler.js         # Lambda function handler
 │   ├── package.json
 │   └── .env.example
 └── package.json          # Root package.json
 ```
 
-## 🚀 Getting Started
+## 🚀 Deployment Guide
 
 ### Prerequisites
 
-- Node.js (v14 or higher)
+- AWS Account with appropriate permissions
+- AWS CLI configured (`aws configure`)
+- Node.js 18.x or higher
 - npm or yarn
-- AWS Account
-- AWS CLI configured (optional)
 
-### Installation
+### Step 1: Create DynamoDB Table
 
-1. **Clone the repository**
+```powershell
+cd server
+npm install
+npm run create-table
+```
 
-   ```powershell
-   cd c:\Users\Lenovo\Desktop\vpc-project-2
-   ```
+Or manually via AWS Console:
 
-2. **Install dependencies for both client and server**
+- Table name: `VPCProjectItems`
+- Partition key: `id` (String)
+- Billing mode: On-demand
 
-   ```powershell
-   npm run install-all
-   ```
+### Step 2: Set Up VPC Infrastructure
 
-   Or install separately:
+#### 2.1 Create VPC
 
-   ```powershell
-   # Install server dependencies
-   cd server; npm install; cd ..
+```bash
+# Create VPC
+VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
+aws ec2 create-tags --resources $VPC_ID --tags Key=Name,Value=dern-stack-vpc
 
-   # Install client dependencies
-   cd client; npm install; cd ..
-   ```
+# Enable DNS
+aws ec2 modify-vpc-attribute --vpc-id $VPC_ID --enable-dns-hostnames
+aws ec2 modify-vpc-attribute --vpc-id $VPC_ID --enable-dns-support
+```
 
-### AWS Configuration
+#### 2.2 Create Private Subnets (for Lambda)
 
-1. **Set up AWS Credentials**
+```bash
+# Private Subnet 1 (AZ a)
+PRIVATE_SUBNET_1=$(aws ec2 create-subnet \
+  --vpc-id $VPC_ID \
+  --cidr-block 10.0.1.0/24 \
+  --availability-zone us-east-1a \
+  --query 'Subnet.SubnetId' --output text)
 
-   Create a `.env` file in the `server/` directory:
+# Private Subnet 2 (AZ b) - for high availability
+PRIVATE_SUBNET_2=$(aws ec2 create-subnet \
+  --vpc-id $VPC_ID \
+  --cidr-block 10.0.2.0/24 \
+  --availability-zone us-east-1b \
+  --query 'Subnet.SubnetId' --output text)
+```
 
-   ```powershell
-   cd server
-   Copy-Item .env.example .env
-   ```
+#### 2.3 Create VPC Endpoint for DynamoDB
 
-2. **Edit the `.env` file** with your AWS credentials:
+```bash
+# Get route table ID
+ROUTE_TABLE_ID=$(aws ec2 describe-route-tables \
+  --filters "Name=vpc-id,Values=$VPC_ID" \
+  --query 'RouteTables[0].RouteTableId' --output text)
 
-   ```env
-   PORT=5000
-   AWS_REGION=us-east-1
-   AWS_ACCESS_KEY_ID=your_access_key_id
-   AWS_SECRET_ACCESS_KEY=your_secret_access_key
-   DYNAMODB_TABLE_NAME=VPCProjectItems
-   ```
+# Create DynamoDB VPC Gateway Endpoint
+aws ec2 create-vpc-endpoint \
+  --vpc-id $VPC_ID \
+  --service-name com.amazonaws.us-east-1.dynamodb \
+  --route-table-ids $ROUTE_TABLE_ID
+```
 
-3. **Create DynamoDB Table**
+#### 2.4 Create Security Group for Lambda
 
-   Option 1: Using the provided script
+```bash
+LAMBDA_SG=$(aws ec2 create-security-group \
+  --group-name lambda-dynamodb-sg \
+  --description "Security group for Lambda in private subnet" \
+  --vpc-id $VPC_ID \
+  --query 'GroupId' --output text)
 
-   ```powershell
-   cd server
-   node scripts/createTable.js
-   ```
+# No inbound rules needed (Lambda is invoked by API Gateway)
+# Outbound to DynamoDB via VPC endpoint (default allows all outbound)
+```
 
-   Option 2: Manual creation via AWS Console
+### Step 3: Deploy Lambda Function
 
-   - Go to AWS DynamoDB Console
-   - Create table named `VPCProjectItems`
-   - Set partition key: `id` (String)
-   - Use default settings or customize as needed
+#### 3.1 Package Lambda
 
-### Running the Application
+```powershell
+cd server
+npm install --production
 
-#### Development Mode
+# Windows (PowerShell)
+Compress-Archive -Path * -DestinationPath lambda.zip -Force
 
-1. **Start the backend server** (Terminal 1):
+# Linux/Mac
+# zip -r lambda.zip . -x "*.git*" "*.env*" "node_modules/aws-sdk/*"
+```
 
-   ```powershell
-   cd server
-   npm run dev
-   ```
+#### 3.2 Create IAM Role for Lambda
 
-   Server will run on `http://localhost:5000`
+```bash
+# Create trust policy
+cat > trust-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
 
-2. **Start the frontend** (Terminal 2):
-   ```powershell
-   cd client
-   npm run dev
-   ```
-   Vite dev server will run on `http://localhost:3000`
+# Create role
+LAMBDA_ROLE_ARN=$(aws iam create-role \
+  --role-name dern-lambda-vpc-role \
+  --assume-role-policy-document file://trust-policy.json \
+  --query 'Role.Arn' --output text)
 
-#### Production Mode
+# Attach policies
+aws iam attach-role-policy \
+  --role-name dern-lambda-vpc-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
 
-1. **Build the React app**:
+# Create inline policy for DynamoDB
+cat > dynamodb-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Scan",
+        "dynamodb:Query"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-1:*:table/VPCProjectItems"
+    }
+  ]
+}
+EOF
 
-   ```powershell
-   cd client
-   npm run build
-   ```
+aws iam put-role-policy \
+  --role-name dern-lambda-vpc-role \
+  --policy-name DynamoDBAccess \
+  --policy-document file://dynamodb-policy.json
+```
 
-2. **Start the server**:
-   ```powershell
-   cd server
-   npm start
-   ```
+#### 3.3 Create Lambda Function
+
+```bash
+aws lambda create-function \
+  --function-name dern-stack-api \
+  --runtime nodejs18.x \
+  --role $LAMBDA_ROLE_ARN \
+  --handler handler.handler \
+  --zip-file fileb://lambda.zip \
+  --timeout 30 \
+  --memory-size 512 \
+  --vpc-config SubnetIds=$PRIVATE_SUBNET_1,$PRIVATE_SUBNET_2,SecurityGroupIds=$LAMBDA_SG \
+  --environment Variables="{DYNAMODB_TABLE_NAME=VPCProjectItems,AWS_REGION=us-east-1}"
+```
+
+### Step 4: Create API Gateway
+
+#### 4.1 Create HTTP API
+
+```bash
+API_ID=$(aws apigatewayv2 create-api \
+  --name dern-stack-api \
+  --protocol-type HTTP \
+  --target arn:aws:lambda:us-east-1:ACCOUNT_ID:function:dern-stack-api \
+  --query 'ApiId' --output text)
+
+# Get API endpoint
+API_ENDPOINT=$(aws apigatewayv2 get-api --api-id $API_ID --query 'ApiEndpoint' --output text)
+echo "API Gateway URL: $API_ENDPOINT"
+```
+
+#### 4.2 Grant API Gateway permission to invoke Lambda
+
+```bash
+aws lambda add-permission \
+  --function-name dern-stack-api \
+  --statement-id apigateway-invoke \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:us-east-1:ACCOUNT_ID:$API_ID/*/*"
+```
+
+#### 4.3 Create Routes
+
+```bash
+# Create integration
+INTEGRATION_ID=$(aws apigatewayv2 create-integration \
+  --api-id $API_ID \
+  --integration-type AWS_PROXY \
+  --integration-uri arn:aws:lambda:us-east-1:ACCOUNT_ID:function:dern-stack-api \
+  --payload-format-version 2.0 \
+  --query 'IntegrationId' --output text)
+
+# Create routes
+aws apigatewayv2 create-route --api-id $API_ID --route-key 'GET /api/health' --target integrations/$INTEGRATION_ID
+aws apigatewayv2 create-route --api-id $API_ID --route-key 'GET /api/items' --target integrations/$INTEGRATION_ID
+aws apigatewayv2 create-route --api-id $API_ID --route-key 'GET /api/items/{id}' --target integrations/$INTEGRATION_ID
+aws apigatewayv2 create-route --api-id $API_ID --route-key 'POST /api/items' --target integrations/$INTEGRATION_ID
+aws apigatewayv2 create-route --api-id $API_ID --route-key 'PUT /api/items/{id}' --target integrations/$INTEGRATION_ID
+aws apigatewayv2 create-route --api-id $API_ID --route-key 'DELETE /api/items/{id}' --target integrations/$INTEGRATION_ID
+
+# Enable CORS
+aws apigatewayv2 update-api --api-id $API_ID \
+  --cors-configuration AllowOrigins="*",AllowMethods="GET,POST,PUT,DELETE,OPTIONS",AllowHeaders="Content-Type"
+```
+
+### Step 5: Deploy Frontend to S3 + CloudFront
+
+#### 5.1 Create S3 Bucket
+
+```bash
+BUCKET_NAME="dern-stack-frontend-$(date +%s)"
+aws s3 mb s3://$BUCKET_NAME --region us-east-1
+aws s3 website s3://$BUCKET_NAME --index-document index.html
+```
+
+#### 5.2 Configure Bucket Policy (for CloudFront OAI)
+
+```bash
+# Create CloudFront Origin Access Identity first (see 5.3)
+# Then apply bucket policy to allow CloudFront access
+```
+
+#### 5.3 Create CloudFront Distribution
+
+```bash
+# Create Origin Access Identity
+OAI_ID=$(aws cloudfront create-cloud-front-origin-access-identity \
+  --cloud-front-origin-access-identity-config \
+    CallerReference="dern-stack-$(date +%s)",Comment="OAI for DERN stack" \
+  --query 'CloudFrontOriginAccessIdentity.Id' --output text)
+
+# Create distribution (simplified - use AWS Console for full config)
+# Or use CloudFormation/Terraform for production
+```
+
+Recommended: Use AWS Console for CloudFront setup:
+
+1. Create distribution with S3 origin
+2. Use Origin Access Identity (OAI)
+3. Default root object: `index.html`
+4. Custom error responses: 403/404 → `/index.html` (200) for SPA routing
+5. Note the CloudFront domain name
+
+#### 5.4 Build and Deploy Frontend
+
+```powershell
+cd client
+
+# Update env.js with your API Gateway URL
+$apiUrl = "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com"
+Set-Content -Path public/env.js -Value "window.__ENV__ = { VITE_API_BASE_URL: '$apiUrl' }"
+
+# Build
+npm run build
+
+# Upload to S3
+aws s3 sync dist s3://$BUCKET_NAME --delete
+
+# Set cache headers
+aws s3 cp dist s3://$BUCKET_NAME --recursive --exclude "*" --include "assets/*" `
+  --cache-control "public, max-age=31536000, immutable"
+
+aws s3 cp dist/index.html s3://$BUCKET_NAME/index.html `
+  --cache-control "no-cache" --content-type "text/html"
+
+aws s3 cp dist/env.js s3://$BUCKET_NAME/env.js `
+  --cache-control "no-store" --content-type "application/javascript"
+
+# Invalidate CloudFront (replace DISTRIBUTION_ID)
+aws cloudfront create-invalidation \
+  --distribution-id YOUR_DISTRIBUTION_ID \
+  --paths "/index.html" "/env.js"
+```
+
+### Step 6: Test the Application
+
+```bash
+# Test API Gateway
+curl https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/api/health
+
+# Access frontend
+# Open https://YOUR_CLOUDFRONT_DOMAIN.cloudfront.net
+```
 
 ## 🔌 API Endpoints
 
-### Base URL: `http://localhost:5000/api`
+All API requests go through API Gateway → Lambda (in private VPC) → DynamoDB (via VPC endpoint).
 
-| Method | Endpoint     | Description     |
-| ------ | ------------ | --------------- |
-| GET    | `/health`    | Health check    |
-| GET    | `/items`     | Get all items   |
-| GET    | `/items/:id` | Get item by ID  |
-| POST   | `/items`     | Create new item |
-| PUT    | `/items/:id` | Update item     |
-| DELETE | `/items/:id` | Delete item     |
+### Base URL
+
+Production: `https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com`
+
+| Method | Endpoint          | Description     |
+| ------ | ----------------- | --------------- |
+| GET    | `/api/health`     | Health check    |
+| GET    | `/api/items`      | Get all items   |
+| GET    | `/api/items/{id}` | Get item by ID  |
+| POST   | `/api/items`      | Create new item |
+| PUT    | `/api/items/{id}` | Update item     |
+| DELETE | `/api/items/{id}` | Delete item     |
 
 ### Request/Response Examples
 
@@ -172,155 +442,155 @@ vpc-project-2/
 }
 ```
 
-## 🌐 AWS VPC Deployment
+## 🌐 Local Development
 
-### EC2 Instance Setup
+For local testing before deploying to AWS:
 
-1. **Launch EC2 Instance in your VPC**
+### Backend (Lambda Handler)
 
-   - Amazon Linux 2 or Ubuntu
-   - t2.micro or larger
-   - Configure security groups
+```powershell
+cd server
+npm install
+npm run dev
+```
 
-2. **Security Group Rules**
+The Lambda handler runs locally (without VPC). You'll need AWS credentials in `.env`.
 
-   - Inbound: Port 22 (SSH)
-   - Inbound: Port 5000 (Backend API)
-   - Inbound: Port 3000 (Frontend - development)
-   - Inbound: Port 80 (HTTP - production)
+### Frontend (Vite Dev Server)
 
-3. **Connect to EC2 and Install Dependencies**
+```powershell
+cd client
+npm install
+npm run dev
+```
 
-   ```bash
-   # Update system
-   sudo yum update -y  # Amazon Linux
-   # or
-   sudo apt update && sudo apt upgrade -y  # Ubuntu
+Access at `http://localhost:3000`. Vite proxy forwards `/api` to `http://localhost:5000`.
 
-   # Install Node.js
-   curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-   sudo yum install -y nodejs
+### Create DynamoDB Table Locally
 
-   # Install git
-   sudo yum install -y git
-   ```
-
-4. **Deploy Application**
-
-   ```bash
-   # Clone your repository
-   git clone <your-repo-url>
-   cd vpc-project-2
-
-   # Install dependencies
-   npm run install-all
-
-   # Configure environment variables
-   cd server
-   nano .env
-   # Add your AWS credentials
-
-   # Build frontend
-   cd ../client
-   npm run build
-
-   # Start server (use PM2 for production)
-   npm install -g pm2
-   cd ../server
-   pm2 start server.js --name vpc-project
-   pm2 save
-   pm2 startup
-   ```
-
-### IAM Permissions
-
-Ensure your EC2 instance or IAM user has the following DynamoDB permissions:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:PutItem",
-        "dynamodb:GetItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:Scan",
-        "dynamodb:Query"
-      ],
-      "Resource": "arn:aws:dynamodb:us-east-1:*:table/VPCProjectItems"
-    }
-  ]
-}
+```powershell
+cd server
+npm run create-table
 ```
 
 ## 🔧 Troubleshooting
 
-### Common Issues
+### Lambda in VPC Cannot Access DynamoDB
 
-1. **Cannot connect to DynamoDB**
+- **Cause**: Missing VPC endpoint or wrong route table association
+- **Fix**: Ensure DynamoDB VPC Gateway Endpoint is created and associated with Lambda's subnet route table
 
-   - Verify AWS credentials in `.env`
-   - Check IAM permissions
-   - Ensure region is correct
-   - Verify table exists
+### Lambda Timeout in VPC
 
-2. **CORS errors**
+- **Cause**: Cold start in VPC takes longer (ENI creation)
+- **Fix**:
+  - Increase Lambda timeout (30s recommended)
+  - Use provisioned concurrency for production
+  - Ensure security group allows outbound traffic
 
-   - Backend CORS is configured to allow all origins in development
-   - For production, update CORS settings in `server.js`
+### CORS Errors from CloudFront
 
-3. **Port already in use**
-   ```powershell
-   # Windows - Kill process on port 5000
-   Get-Process -Id (Get-NetTCPConnection -LocalPort 5000).OwningProcess | Stop-Process
-   ```
+- **Cause**: API Gateway CORS not configured or CloudFront caching OPTIONS responses
+- **Fix**:
+  - Enable CORS on API Gateway with correct origins
+  - Set CloudFront cache behavior to forward `Origin` header
+  - Ensure Lambda returns proper CORS headers (already in `handler.js`)
+
+### SPA Routes Return 404 on CloudFront
+
+- **Cause**: CloudFront trying to serve `/about` as a file in S3
+- **Fix**: Create custom error responses in CloudFront:
+  - 403 → `/index.html` (200)
+  - 404 → `/index.html` (200)
+
+### Cannot Update API URL Without Rebuild
+
+- **Solution**: Use runtime `env.js` (already implemented)
+  - Update `dist/env.js` on S3
+  - Set `Cache-Control: no-store`
+  - Invalidate `/env.js` on CloudFront
 
 ## 📝 Features
 
-- ✅ Create, Read, Update, Delete (CRUD) operations
-- ✅ Real-time data synchronization with DynamoDB
-- ✅ Responsive UI design
-- ✅ Error handling and validation
-- ✅ AWS integration ready
-- ✅ VPC deployment compatible
+- ✅ **Serverless Architecture** - No servers to manage, auto-scaling
+- ✅ **Secure VPC Design** - Lambda in private subnets, no internet exposure
+- ✅ **Cost-Effective** - VPC Gateway Endpoint eliminates NAT Gateway costs
+- ✅ **Global CDN** - CloudFront for fast content delivery worldwide
+- ✅ **CRUD Operations** - Complete Create, Read, Update, Delete functionality
+- ✅ **Real-time Data** - Direct DynamoDB integration via VPC endpoint
+- ✅ **Responsive UI** - Mobile-friendly React interface
+- ✅ **Runtime Configuration** - Update API URL without rebuilding frontend
+- ✅ **Error Handling** - Comprehensive error responses and validation
 
 ## 🛠️ Technologies Used
 
-- **Frontend**
+### Frontend
 
-  - React 18
-  - Vite
-  - Axios
-  - CSS3
+- **React 18** - Modern UI library with hooks
+- **Vite** - Lightning-fast build tool and dev server
+- **Axios** - HTTP client with interceptors
+- **CSS3** - Responsive styling with gradients
 
-- **Backend**
+### Backend
 
-  - Node.js
-  - Express
-  - AWS SDK for JavaScript
+- **Node.js 18.x** - JavaScript runtime
+- **AWS Lambda** - Serverless compute in private VPC
+- **AWS SDK v2** - DynamoDB client
+- **API Gateway (HTTP API)** - RESTful endpoint
 
-- **Database**
+### Infrastructure
 
-  - AWS DynamoDB
+- **Amazon S3** - Static website hosting
+- **Amazon CloudFront** - CDN and HTTPS termination
+- **Amazon VPC** - Private network with subnets
+- **VPC Gateway Endpoint** - Private DynamoDB access
+- **Amazon DynamoDB** - NoSQL database (on-demand billing)
 
-- **DevOps**
-  - AWS VPC
-  - AWS EC2
-  - PM2 (Process Manager)
+### DevOps
+
+- **AWS CLI** - Infrastructure provisioning
+- **PowerShell** - Deployment scripts
+- **Git** - Version control
 
 ## 📚 Learning Resources
 
 - [AWS VPC Documentation](https://docs.aws.amazon.com/vpc/)
-- [DynamoDB Developer Guide](https://docs.aws.amazon.com/dynamodb/)
+- [AWS Lambda in VPC](https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html)
+- [VPC Endpoints](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints.html)
+- [DynamoDB Gateway Endpoint](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-ddb.html)
+- [API Gateway Documentation](https://docs.aws.amazon.com/apigateway/)
+- [CloudFront with S3](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/GettingStarted.SimpleDistribution.html)
 - [React Documentation](https://react.dev/)
-- [Express.js Guide](https://expressjs.com/)
+- [Vite Guide](https://vitejs.dev/guide/)
+
+## 💰 Cost Estimation (Monthly)
+
+Based on moderate usage (training/demo):
+
+| Service      | Usage                      | Estimated Cost   |
+| ------------ | -------------------------- | ---------------- |
+| Lambda       | 1M requests, 512MB, 1s avg | $0.20            |
+| API Gateway  | 1M requests                | $1.00            |
+| DynamoDB     | On-demand, 1GB storage     | $0.25            |
+| S3           | 1GB storage, 10K requests  | $0.05            |
+| CloudFront   | 10GB transfer              | $0.85            |
+| VPC Endpoint | Gateway (DynamoDB)         | **FREE**         |
+| **Total**    |                            | **~$2.35/month** |
+
+**Note**: VPC Gateway Endpoint for DynamoDB is free, avoiding NAT Gateway costs ($32+/month)!
 
 ## 🤝 Contributing
 
-This is a training project. Feel free to fork and experiment!
+This is a training project demonstrating AWS VPC architecture with serverless components. Feel free to fork and experiment!
+
+### Suggested Improvements
+
+- Add authentication (Amazon Cognito)
+- Implement CI/CD (GitHub Actions, AWS CodePipeline)
+- Add monitoring (CloudWatch, X-Ray)
+- Use Infrastructure as Code (CloudFormation, Terraform, CDK)
+- Add API rate limiting (API Gateway usage plans)
+- Implement DynamoDB backups and point-in-time recovery
 
 ## 📄 License
 
@@ -328,8 +598,8 @@ ISC
 
 ## 👨‍💻 Author
 
-VPC Project Training
+AWS VPC Project Training - Serverless Architecture Demo
 
 ---
 
-**Happy Coding! 🚀**
+**Built with ❤️ for learning AWS serverless and VPC architecture! 🚀**
